@@ -15823,7 +15823,7 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
       h('div.dz-mode', h('span.muted.small', 'How do you want to work?'), FM.modeSwitch('lg'),
         h('div.muted.small.dz-mode-d', FM.ui.mode === 'traditional'
           ? 'A workspace of samples with their population trees, tables and compensation — the classic way.'
-          : 'Four steps: load a plate, map the conditions, gate every well at once, measure.')),
+          : 'Five steps: load a plate, map the conditions, gate every well at once, measure, graph.')),
       h('div.row.dz-actions',
         h('button.btn.primary.lg', { on: { click: async () => { const f = await FM.dom.pickFiles({ multiple: true, accept: '.fcs,.FCS,.lmd' }); if (f.length) { await FM.loadFiles(f); render(); } } } }, icon('file'), 'Choose files'),
         h('button.btn.lg', { on: { click: async () => { const f = await FM.dom.pickFiles({ directory: true }); if (f.length) { await FM.loadFiles(f); render(); } } } }, icon('folder'), 'Choose folder')),
@@ -15942,7 +15942,8 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
         h('li', h('strong', 'Load.'), ' Drop your FCS files or a whole folder. Wells are read from the file names.'),
         h('li', h('strong', 'Plate.'), ' Name your conditions and paint them onto the wells.'),
         h('li', h('strong', 'Gate.'), ' Draw once and every well follows live — polygon, rectangle, ellipse, quadrant, range, and And / Or / Not combinations.'),
-        h('li', h('strong', 'Measure.'), ' Pick populations and statistics; one row per well. Copy it into Excel or Prism, or export a CSV.')),
+        h('li', h('strong', 'Measure.'), ' Pick populations and statistics, or a formula; one row per well. Copy it into Excel or Prism, or export a CSV.'),
+        h('li', h('strong', 'Analysis.'), ' Graph a measurement by condition, with SD or SEM and the P values worked out.')),
       h('p.muted.small.about-trad', 'Prefer the classic layout? Switch to ', h('strong', 'Traditional gating'), ' — samples with population trees, tables and compensation. Your gates come with you.'),
       h('div.panel-foot', h('button.btn', { on: { click: () => FM.openGuide() } }, icon('help'), 'Read the guide & FAQ')));
   }
