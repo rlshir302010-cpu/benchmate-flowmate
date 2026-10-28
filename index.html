@@ -1702,7 +1702,7 @@ b.st-adjusted, b.st-inherited { color: var(--warn); }
 /* ---------------------------------------------------------- gate step additions */
 .new-scope .seg button { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tube-bars { display: flex; flex-direction: column; gap: 2px; }
-.tube-bar { display: grid; grid-template-columns: minmax(70px, 1.1fr) 1fr 64px; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 3px 4px; cursor: pointer; text-align: left; color: var(--ink-2); font-size: 12px; }
+.tube-bar { display: grid; grid-template-columns: minmax(80px, 2.2fr) minmax(40px, 1fr) 54px; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 3px 4px; cursor: pointer; text-align: left; color: var(--ink-2); font-size: 12px; }
 .tube-bar:hover { background: var(--hover); }
 .tube-bar.cur { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
 .tube-bar.excl { opacity: .55; }
@@ -17245,6 +17245,7 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
   let lastGroups = null;     // well → group at the previous render, to flash wells that just changed
   let axes = null;            // { x, y } of the plots beside the plate (null: the Gate step's view)
   const MAX_PLOTS = 48;
+  let lastClick = null;       // the anchor of a Shift-click range in the list
   let focusName = null;      // a condition just created: focus its name in the side panel
 
   const W = () => FM.ws;
@@ -17392,6 +17393,7 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     const frame = FM.wells.frame(wellSamples.map(s => s.well));
     const bySample = new Map(wellSamples.map(s => [s.well, s]));
     const n = selected.size;
+    const listView = !!frame && FM.ui.plateView === 'list';
 
     const tools = h('div.plate-tools',
       n ? h('div.sel-bar',
@@ -17405,11 +17407,14 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
         { label: 'Conditions by row, in list order', icon: 'grid', fn: () => quickLayout('row') },
         { label: 'Conditions by column, in list order', icon: 'grid', fn: () => quickLayout('col') },
       ], { align: 'right' }) } }, 'Quick layout', icon('down')) : null,
+      frame ? h('div.seg.sm.plate-view', { role: 'group', 'aria-label': 'View' }, [['plate', 'Plate', 'The plate map' + (tubes.length ? ', with the tubes under it' : '')], ['list', tubes.length ? 'Wells + tubes' : 'List', 'Every well and tube in one list, to highlight and name them together']].map(([k, l, tip]) =>
+        h('button' + (listView === (k === 'list') ? '.on' : ''), { 'data-tip': tip, on: { click: () => { FM.ui.plateView = k; render(); } } }, l))) : null,
       h('div.seg.sm', [['events', 'Events'], ['order', 'Run order']].map(([k, l]) =>
         h('button' + (overlay === k ? '.on' : ''), { 'data-tip': k === 'order' ? 'Acquisition order from $BTIM — blocks of one condition in a row reveal time confounding' : 'Events acquired', on: { click: () => { overlay = k; render(); } } }, l))));
 
     const body = h('div.plate-body');
-    if (frame) {
+    if (listView) body.appendChild(sampleList(ws.samples, 'Every well and tube'));
+    else if (frame) {
       const nr = frame.r1 - frame.r0 + 1, nc = frame.c1 - frame.c0 + 1;
       const grid = h('div.plate-grid', { style: { gridTemplateColumns: '28px repeat(' + nc + ', minmax(64px, 132px))' } });
       const colKeys = c => wellSamples.filter(s => FM.wells.parse(s.well).col === c).map(s => s.key);
@@ -17427,7 +17432,7 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
       body.appendChild(grid);
       body.appendChild(h('div.plate-caption.muted.small', nr + ' × ' + nc + ' of a ' + frame.format + '-well plate · ' + wellSamples.length + ' wells with data'));
     }
-    if (tubes.length) body.appendChild(tubeList(tubes));
+    if (tubes.length && !listView) body.appendChild(sampleList(tubes, frame ? 'Tubes and files without a well ID' : 'Tubes'));
     return h('section.plate-main', tools, h('div.plate-split', h('div.scroll.plate-scroll', body), plotsPanel()));
   }
 
@@ -17454,19 +17459,36 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     return el;
   }
 
-  function tubeList(tubes) {
+  /**
+   * Samples as a table — the tubes under a plate, or (List view) every well and tube together — so
+   * they are highlighted and named the same way: click one, Ctrl-click to add, Shift-click a range.
+   */
+  function sampleList(list, title) {
     const ws = W();
-    const all = tubes.every(s => selected.has(s.key));
+    const all = list.length > 0 && list.every(s => selected.has(s.key));
+    const keys = list.map(s => s.key);
+    const click = (e, k) => {
+      if (e.shiftKey && lastClick && keys.includes(lastClick)) {
+        const [i, j] = [keys.indexOf(lastClick), keys.indexOf(k)].sort((x, y) => x - y);
+        keys.slice(i, j + 1).forEach(x => selected.add(x));
+        render();
+        return;
+      }
+      lastClick = k;
+      select([k], e.ctrlKey || e.metaKey);
+    };
+    const hasWells = list.some(s => s.well && !s.wellConflict);
     return h('div.tubes',
-      h('div.eyebrow', 'Tubes and files without a well ID'),
+      h('div.eyebrow', title),
       h('table.tbl', h('thead', h('tr',
-        h('th', h('input', { type: 'checkbox', checked: all, 'aria-label': 'Highlight every tube', on: { change: e => { tubes.forEach(s => (e.target.checked ? selected.add(s.key) : selected.delete(s.key))); render(); } } })),
-        h('th', 'File'), h('th.r', 'Events'), h('th', 'Condition'), h('th', ''))),
-      h('tbody', tubes.map(s => {
+        h('th', h('input', { type: 'checkbox', checked: all, 'aria-label': 'Highlight all of them', on: { change: e => { list.forEach(s => (e.target.checked ? selected.add(s.key) : selected.delete(s.key))); render(); } } })),
+        hasWells ? h('th', 'Well') : null, h('th', 'File'), h('th.r', 'Events'), h('th', 'Condition'), h('th', ''))),
+      h('tbody', list.map(s => {
         const w = ws.wellInfo(s.key);
         const g = w.group ? ws.group(w.group) : null;
-        return h('tr.tube' + (selected.has(s.key) ? '.sel' : ''), { 'data-key': s.key, on: { click: e => { if (e.target.closest('input')) return; select([s.key], e.shiftKey || e.ctrlKey || e.metaKey); } } },
-          h('td', h('input.tube-sel', { type: 'checkbox', checked: selected.has(s.key), 'aria-label': 'Highlight ' + s.name, on: { change: e => { if (e.target.checked) selected.add(s.key); else selected.delete(s.key); render(); } } })),
+        return h('tr.tube' + (selected.has(s.key) ? '.sel' : ''), { 'data-key': s.key, on: { click: e => { if (e.target.closest('input')) return; click(e, s.key); } } },
+          h('td', h('input.tube-sel', { type: 'checkbox', checked: selected.has(s.key), 'aria-label': 'Highlight ' + s.name, on: { change: e => { if (e.target.checked) selected.add(s.key); else selected.delete(s.key); lastClick = s.key; render(); } } })),
+          hasWells ? h('td.mono', s.well && !s.wellConflict ? s.well : h('span.faint', 'tube')) : null,
           h('td', h('div.fname', s.name)),
           h('td.r.num', fmtCount(s.n)),
           h('td', g ? h('span.row.small', h('span.swatch', { style: { background: g.color } }), g.name) : h('span.faint', '—')),
@@ -19260,13 +19282,21 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     clear(els.wellsHead); clear(els.wells);
     const gate = pid ? ws.gate(pid) : null;
     const show = wellsShow(gate);
-    const title = !gate ? 'Events per well' : show === 'events' ? 'Events in ' + gate.name : show === 'both' ? '% and events in ' + gate.name : '% in ' + gate.name;
+    // wells and tubes are the same to every gate: a plate map shows the wells, and the tubes sit under it
+    // (or everything together in the List view)
+    const frame = FM.wells.frame(ws.samples.filter(s => s.well && !s.wellConflict).map(s => s.well));
+    const tubes = ws.samples.filter(s => !s.well || s.wellConflict);
+    const mixed = !!frame && tubes.length > 0;
+    const view = frame && FM.ui.wellsView !== 'list' ? 'plate' : 'list';
+    const title = !gate ? (mixed ? 'Events per sample' : 'Events per well') : show === 'events' ? 'Events in ' + gate.name : show === 'both' ? '% and events in ' + gate.name : '% in ' + gate.name;
     const SHOWS = [['pct', '%', 'Percentage of the parent population'], ['events', 'Events', 'Number of events inside the gate'], ['both', 'Both', 'Percentage and events side by side']];
     FM.dom.append(els.wellsHead, [
-      h('div.wells-title', h('div.eyebrow', 'Across all wells'), h('h3', title),
+      h('div.wells-title', h('div.eyebrow', mixed ? 'Across all wells and tubes' : 'Across all wells'), h('h3', title),
         gate ? h('div.muted.small', show === 'events' ? 'events inside the gate, per well' : 'of ' + ws.popName(gate.parent) + (show === 'both' ? ' · events below' : '')) : null),
       gate ? h('div.seg.sm.show-seg', { role: 'group', 'aria-label': 'Show' }, SHOWS.map(([v, label, tip]) =>
-        h('button' + (show === v ? '.on' : ''), { 'data-tip': tip, 'aria-pressed': show === v ? 'true' : 'false', on: { click: () => setWellsShow(v) } }, label))) : null]);
+        h('button' + (show === v ? '.on' : ''), { 'data-tip': tip, 'aria-pressed': show === v ? 'true' : 'false', on: { click: () => setWellsShow(v) } }, label))) : null,
+      frame ? h('div.seg.sm.wells-view', { role: 'group', 'aria-label': 'View' }, [['plate', 'Plate', 'The plate map' + (mixed ? ', with the tubes under it' : '')], ['list', mixed ? 'Wells + tubes' : 'List', 'Every well and tube in one list, by condition']].map(([v, label, tip]) =>
+        h('button' + (view === v ? '.on' : ''), { 'data-tip': tip, 'aria-pressed': view === v ? 'true' : 'false', on: { click: () => { FM.ui.wellsView = v; renderWells(current()); } } }, label))) : null]);
     // p: % of parent · n: events in the gate · v: the number colours and positions follow
     const vals = ws.samples.map(s => {
       const n = gate ? ws.count(s, pid) : s.n, p = gate ? ws.pct(s, pid) : NaN;
@@ -19276,16 +19306,31 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     const max = show === 'events' ? Math.max(1, ...finite.map(x => x.v)) : 100;
     const strong = !!gate;   // a gate's numbers differ well to well; raw acquisition counts barely do
 
+    // one bar per sample, grouped by condition (tubes, or wells and tubes together)
+    const bars = keys => {
+      const want = new Set(keys);
+      const order = stripOrder().filter(o => want.has(o.s.key)).map(o => vals.find(x => x.s.key === o.s.key)).filter(Boolean);
+      return h('div.tube-bars', order.slice(0, 300).map(x => {
+        const frac = Number.isFinite(x.v) ? Math.max(0, Math.min(1, x.v / max)) : 0;
+        return h('button.tube-bar' + (x.s.key === m.sample.key ? '.cur' : '') + (x.info.excluded ? '.excl' : '') + (sel.has(x.s.key) ? '.picked' : ''), {
+          'data-key': x.s.key,
+          'data-tip': (x.s.well || x.s.name) + (x.g ? ' · ' + x.g.name : '') + ' — ' + (gate ? fmtPct(x.p) + ' · ' + fmtCount(x.n) + ' events' : fmtCount(x.n) + ' events') + ' · shift-click to select',
+          on: { click: e => cellClick(e, x.s.key) } },
+          h('span.tb-name', { title: x.s.name }, x.g ? h('span.swatch', { style: { background: x.g.color } }) : null, x.s.well && !x.s.wellConflict ? x.s.well : x.s.name.replace(/\.fcs$/i, '')),
+          h('span.tb-track', h('span.tb-fill', { style: { width: Math.round(frac * 100) + '%', background: x.g ? x.g.color : 'var(--accent)' } })),
+          h('span.tb-val.mono', !Number.isFinite(x.v) ? '—' : show === 'events' ? fmtCount(x.n) : fmtPct(x.p)));
+      }));
+    };
+
     // plate heatmap
-    const frame = FM.wells.frame(ws.samples.map(s => s.well).filter(Boolean));
-    if (frame) {
+    if (view === 'plate') {
       const nc = frame.c1 - frame.c0 + 1;
       // exact counts wherever the cell is wide enough to hold them; a full plate falls back to 5.1K
       const cellEv = n => ((n < 1e4 && nc <= 8) || (n < 1e5 && nc <= 5) ? fmtCount(n) : fmtEv(n));
       const grid = h('div.mini-plate' + (show === 'both' ? '.both' : ''), { style: { gridTemplateColumns: '16px repeat(' + nc + ', 1fr)' } });
       grid.appendChild(h('span'));
       for (let c = frame.c0; c <= frame.c1; c++) grid.appendChild(h('span.mp-h', String(c + 1)));
-      const byWell = new Map(vals.filter(x => x.s.well).map(x => [x.s.well, x]));
+      const byWell = new Map(vals.filter(x => x.s.well && !x.s.wellConflict).map(x => [x.s.well, x]));
       for (let r = frame.r0; r <= frame.r1; r++) {
         grid.appendChild(h('span.mp-h', FM.wells.ROWS[r]));
         for (let c = frame.c0; c <= frame.c1; c++) {
@@ -19307,19 +19352,13 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
         }
       }
       els.wells.appendChild(grid);
+      if (tubes.length) {
+        els.wells.appendChild(h('div.eyebrow.sect', 'Tubes'));
+        els.wells.appendChild(bars(tubes.map(s => s.key)));
+      }
       els.wells.appendChild(selectionBar(m, pid, sel));
     } else {
-      // tubes, not a plate: one bar per sample, grouped by condition
-      const order = stripOrder().map(o => vals.find(x => x.s.key === o.s.key)).filter(Boolean);
-      els.wells.appendChild(h('div.tube-bars', order.slice(0, 200).map(x => {
-        const frac = Number.isFinite(x.v) ? Math.max(0, Math.min(1, x.v / max)) : 0;
-        return h('button.tube-bar' + (x.s.key === m.sample.key ? '.cur' : '') + (x.info.excluded ? '.excl' : '') + (sel.has(x.s.key) ? '.picked' : ''), {
-          'data-tip': (x.s.well || x.s.name) + (x.g ? ' · ' + x.g.name : '') + ' — ' + (gate ? fmtPct(x.p) + ' · ' + fmtCount(x.n) + ' events' : fmtCount(x.n) + ' events') + ' · shift-click to select',
-          on: { click: e => cellClick(e, x.s.key) } },
-          h('span.tb-name', { title: x.s.name }, x.g ? h('span.swatch', { style: { background: x.g.color } }) : null, x.s.well || x.s.name.replace(/\.fcs$/i, '')),
-          h('span.tb-track', h('span.tb-fill', { style: { width: Math.round(frac * 100) + '%', background: x.g ? x.g.color : 'var(--accent)' } })),
-          h('span.tb-val.mono', !Number.isFinite(x.v) ? '—' : show === 'events' ? fmtCount(x.n) : fmtPct(x.p)));
-      })));
+      els.wells.appendChild(bars(ws.samples.map(s => s.key)));
       els.wells.appendChild(selectionBar(m, pid, sel));
     }
 
