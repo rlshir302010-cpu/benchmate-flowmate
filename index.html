@@ -254,6 +254,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
+/* drag to reorder (FM.dom.sortable) */
+.sortable { cursor: grab; touch-action: none; user-select: none; }
+.sortable.dragging { cursor: grabbing; position: relative; z-index: 5; opacity: .85; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.sort-x.drop-before { box-shadow: -3px 0 0 var(--accent); }
+.sort-x.drop-after { box-shadow: 3px 0 0 var(--accent); }
+.sort-y.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.sort-y.drop-after { box-shadow: 0 3px 0 var(--accent); }
+
 /* --- styles/shell.css --- */
 /* App shell: top bar, stepper, view frame, empty states. */
 #app { height: 100vh; display: flex; flex-direction: column; }
@@ -7378,6 +7386,16 @@ FM.store = (function () {
       { kind: 'graphs', coalesce: patch.name != null || patch.yLabel != null ? 'graph:' + id + ':' + Object.keys(patch).join(',') : null });
   };
 
+  /** Move the graph at index `from` to index `to` in the list. */
+  P.moveGraph = function (from, to) {
+    this.update('Move graph', d => {
+      const gs = d.graphs || [];
+      if (from < 0 || from >= gs.length || to < 0 || to >= gs.length || from === to) return;
+      const [g] = gs.splice(from, 1);
+      gs.splice(to, 0, g);
+    }, { kind: 'graphs' });
+  };
+
   P.deleteGraph = function (id) {
     this.update('Delete graph', d => { d.graphs = (d.graphs || []).filter(x => x.id !== id); }, { kind: 'graphs' });
   };
@@ -8788,7 +8806,7 @@ FM.store = (function () {
  *
  *   doc.graphs = [{ id, name, src: { table, col }, kind: 'bar'|'dot'|'box'|'paired',
  *                   error: 'sd'|'sem', groups: [groupId] | null (every condition), compare: 'all'|'control'|'none',
- *                   control: groupId, pairBy: 'order'|'row'|'col', showNs, pText: 'stars'|'exact', yLabel }]
+ *                   control: groupId, pairBy: 'order'|'row'|'col', showNs, showValues, pText: 'stars'|'exact', yLabel }]
  *
  * compute() turns one into what the view shows: the chart model (render/statchart.js) and the
  * statistics (core/groupstats.js). Each well is one value; excluded wells never take part.
@@ -8906,7 +8924,7 @@ FM.store = (function () {
     if (g.compare === 'control' && ci < 0) notes.push('Pick the condition to compare against.');
     const yLabel = g.yLabel || label;
     const model = {
-      title: g.name || '', yLabel, kind: g.kind, error: g.error, showNs: !!g.showNs, pText: g.pText, sets, comparisons: stats.comparisons,
+      title: g.name || '', yLabel, kind: g.kind, error: g.error, showNs: !!g.showNs, showValues: !!g.showValues, pText: g.pText, sets, comparisons: stats.comparisons,
       groups: shown.map((e, i) => ({ name: e.group.name, color: e.group.color,
         values: e.rows.filter(r => finite(r.value)).map(r => ({ v: r.value, label: r.name })), summary: stats.summary[i] })),
     };
@@ -13914,6 +13932,14 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
    *          showNs, pText: 'stars'|'exact' }
    * → <svg> with width and height set, ready to show or serialise.
    */
+  /** A value as written over a bar: whole numbers with separators, smaller ones to 3 significant digits. */
+  function fmtValue(v) {
+    const a = Math.abs(v);
+    if (a >= 1000) return Math.round(v).toLocaleString('en-US');
+    if (a === 0) return '0';
+    return String(Number(v.toPrecision(3)));
+  }
+
   function render(model) {
     const groups = model.groups;
     const kind = model.kind || 'bar';
@@ -13949,11 +13975,20 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     let brackets = (model.comparisons || []).map(c => ({ i: Math.min(c.a, c.b), j: Math.max(c.a, c.b), p: c.p,
       label: model.pText === 'exact' ? FM.groupStats.pText(c.p).replace(/^(?=\d)/, 'P = ').replace(/^</, 'P < ').replace(/^>/, 'P > ') : c.stars }));
     if (!model.showNs) brackets = brackets.filter(b => b.p <= 0.05);
+    // the value written over each condition: the mean (the median on a box plot), just above its bar,
+    // error bar or box — brackets then stack above the label as they do above the data
+    const valueOf = s => (kind === 'box' ? s.median : s.mean);
+    const labelAt = s => {
+      const e = errOf(s);
+      if (kind === 'box') return Yd(s.max) - 7;
+      return Yd(Math.max(s.mean, 0) + ((kind === 'bar' || kind === 'dot') && finite(e) ? e : 0)) - 7;
+    };
     const tops = groups.map(g => {
       const s = g.summary, e = errOf(s);
       const ys = g.values.map(x => Yd(x.v)).filter(finite);
       if (kind === 'bar' || kind === 'dot') ys.push(Yd(s.mean + (finite(e) ? e : 0)));
       if (kind === 'box') ys.push(Yd(s.max));
+      if (model.showValues && finite(valueOf(s))) ys.push(labelAt(s) - 12);
       return ys.filter(finite).length ? Math.min(...ys.filter(finite)) : dataH;
     });
     const STEP = 25, PADB = 12;
@@ -14040,6 +14075,13 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
       const ly = base + 18;
       if (rotate) svg.appendChild(txt(cx + 4, ly - 4, g.name, { 'text-anchor': 'end', transform: 'rotate(-40 ' + (cx + 4) + ' ' + (ly - 4) + ')', 'font-size': 12.5 }));
       else svg.appendChild(txt(cx, ly, g.name, { 'text-anchor': 'middle', 'font-size': 12.5 }));
+    });
+
+    // ---- values over the bars
+    if (model.showValues) groups.forEach((g, i) => {
+      const v = valueOf(g.summary);
+      if (!finite(v)) return;
+      svg.appendChild(txt(X(i), top + labelAt(g.summary), fmtValue(v), { class: 'sc-value', 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600 }));
     });
 
     // ---- brackets
@@ -14578,10 +14620,56 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     const d = new Date(ms);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
+  /**
+   * Drag to reorder: press on an item, move past a few pixels, drop it where it should go. The others
+   * mark the drop place (classes drop-before / drop-after, plus sort-x or sort-y for the direction);
+   * onMove(from, to) gets the indices. A drag swallows the click that ends it, so a chip that is also
+   * a button still reorders. opts.axis: 'x' (a row of chips, the default) or 'y' (a list).
+   */
+  function sortable(els, onMove, opts) {
+    const axis = (opts && opts.axis) || 'x';
+    els.forEach((el, i) => {
+      el.classList.add('sortable', 'sort-' + axis);
+      el.addEventListener('pointerdown', e => {
+        if (e.button !== 0 || e.target.closest('input, select, textarea')) return;
+        const x0 = e.clientX, y0 = e.clientY;
+        const rects = els.map(x => x.getBoundingClientRect());
+        let on = false, to = i;
+        const mark = () => els.forEach((x, j) => { x.classList.toggle('drop-before', on && j === to && to < i); x.classList.toggle('drop-after', on && j === to && to > i); });
+        const move = ev => {
+          if (!on && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+          on = true;
+          el.classList.add('dragging');
+          el.style.transform = 'translate(' + (axis === 'y' ? 0 : ev.clientX - x0) + 'px,' + (ev.clientY - y0) + 'px)';
+          let best = i, bd = Infinity;
+          rects.forEach((r, j) => {
+            const dx = Math.abs(ev.clientX - (r.left + r.width / 2)), dy = Math.abs(ev.clientY - (r.top + r.height / 2));
+            const d = axis === 'y' ? dy : dx + 3 * dy;
+            if (d < bd) { bd = d; best = j; }
+          });
+          to = best; mark();
+        };
+        const up = () => {
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          el.classList.remove('dragging'); el.style.transform = '';
+          const was = on; on = false; mark();
+          if (!was) return;
+          const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
+          window.addEventListener('click', swallow, true);
+          setTimeout(() => window.removeEventListener('click', swallow, true), 0);
+          if (to !== i) onMove(i, to);
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      });
+    });
+  }
+
   function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   FM.dom = { h, s, clear, append, setAttrs, icon, ICONS, toast, popover, closePop, menu, modal, confirm, initTooltips,
-    download, pickFiles, filesFromDrop, debounce, rafThrottle, frame, fmtPct, fmtCount, fmtTime, esc };
+    download, pickFiles, filesFromDrop, debounce, rafThrottle, frame, fmtPct, fmtCount, fmtTime, esc, sortable };
 })(FM);
 
 /* --- ui/brand.js --- */
@@ -21044,44 +21132,8 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
         : h('span.tbv-cl', label),
       h('button.btn.ghost.sm.icon', { 'data-tip': 'Remove', on: { click: () => ws.removeTableColumn(t.id, i) } }, icon('x')));
     });
-    sortable(chips, (from, to) => ws.moveTableColumn(t.id, from, to - from));
+    FM.dom.sortable(chips, (from, to) => ws.moveTableColumn(t.id, from, to - from));
     return h('div.tbv-cols', { 'data-tip': 'Drag a column to move it' }, chips);
-  }
-
-  /**
-   * Drag to reorder: press on an item, move past a few pixels, drop it where it should go. The others
-   * mark the drop place; onMove(from, to) gets the indices. A drag swallows the click that ends it.
-   */
-  function sortable(els, onMove) {
-    els.forEach((el, i) => el.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || e.target.closest('input, select, .tbv-x')) return;
-      const x0 = e.clientX, y0 = e.clientY;
-      const rects = els.map(x => x.getBoundingClientRect());
-      let on = false, to = i;
-      const mark = () => els.forEach((x, j) => { x.classList.toggle('drop-before', on && j === to && to < i); x.classList.toggle('drop-after', on && j === to && to > i); });
-      const move = ev => {
-        if (!on && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
-        on = true;
-        el.classList.add('dragging');
-        el.style.transform = 'translate(' + (ev.clientX - x0) + 'px,' + (ev.clientY - y0) + 'px)';
-        let best = i, bd = Infinity;
-        rects.forEach((r, j) => { const d = Math.abs(ev.clientX - (r.left + r.width / 2)) + 3 * Math.abs(ev.clientY - (r.top + r.height / 2)); if (d < bd) { bd = d; best = j; } });
-        to = best; mark();
-      };
-      const up = () => {
-        document.removeEventListener('pointermove', move);
-        document.removeEventListener('pointerup', up);
-        el.classList.remove('dragging'); el.style.transform = '';
-        const was = on; on = false; mark();
-        if (!was) return;
-        const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
-        window.addEventListener('click', swallow, true);
-        setTimeout(() => window.removeEventListener('click', swallow, true), 0);
-        if (to !== i) onMove(i, to);
-      };
-      document.addEventListener('pointermove', move);
-      document.addEventListener('pointerup', up);
-    }));
   }
 
   /** Edit a formula column's name and formula in place. */
@@ -21127,7 +21179,7 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
   function grid(b, t) {
     if (!b.columns.length) return h('div');
     const heads = b.head.map((x, i) => h('th' + (i > 1 ? '.r.tbv-drag' : ''), i > 1 ? { 'data-tip': 'Drag to move this column' } : null, i > 1 ? h('span.col-letter.mono', L(i - 2)) : null, x));
-    if (t) sortable(heads.slice(2), (from, to) => W().moveTableColumn(t.id, from, to - from));
+    if (t) FM.dom.sortable(heads.slice(2), (from, to) => W().moveTableColumn(t.id, from, to - from));
     return h('div.scroll.tbv-grid', h('table.tbl.tbv-table',
       h('thead', h('tr', heads)),
       h('tbody', b.rows.map(r => h('tr' + (r.excluded ? '.dim' : ''),
@@ -21227,12 +21279,15 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
   function renderList() {
     const ws = W();
     clear(els.list);
-    (ws.doc.graphs || []).forEach(g => {
+    const items = (ws.doc.graphs || []).map(g => {
       const on = FM.ui.graphId === g.id;
-      els.list.appendChild(h('button.tbv-item' + (on ? '.on' : ''), {
+      return h('button.tbv-item' + (on ? '.on' : ''), {
+        'data-id': g.id,
         on: { click: () => { FM.ui.graphId = g.id; render(); }, contextmenu: e => { e.preventDefault(); graphMenu(g, { x: e.clientX, y: e.clientY }); } },
-      }, icon(KIND_ICON[g.kind] || 'chart'), h('span.grow.tbv-name', graphName(ws, g))));
+      }, icon(KIND_ICON[g.kind] || 'chart'), h('span.grow.tbv-name', graphName(ws, g)));
     });
+    items.forEach(el => els.list.appendChild(el));
+    FM.dom.sortable(items, (from, to) => ws.moveGraph(from, to), { axis: 'y' });
     if (!(ws.doc.graphs || []).length) els.list.appendChild(h('div.muted.small.pad', 'No graphs yet.'));
   }
 
@@ -21296,6 +21351,8 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
       h('span.grow'),
       g.kind === 'paired' ? h('label.anv-opt', h('span.muted.small', 'Match wells by'), h('select.input.sm.anv-pairby', { on: { change: e => set({ pairBy: e.target.value }) } },
         G().PAIR_BY.map(p => h('option', { value: p.id, selected: g.pairBy === p.id, title: p.tip }, p.label)))) : null,
+      h('label.anv-opt.anv-showvals', { 'data-tip': 'Write each condition’s ' + (g.kind === 'box' ? 'median' : 'mean') + ' over its ' + (g.kind === 'bar' ? 'bar' : 'data') },
+        h('input', { type: 'checkbox', checked: !!g.showValues, on: { change: e => set({ showValues: e.target.checked }) } }), h('span.small', 'Show values')),
       h('label.anv-opt.anv-showns', { 'data-tip': 'Draw a bracket for every comparison, not only P < 0.05' },
         h('input', { type: 'checkbox', checked: !!g.showNs, on: { change: e => set({ showNs: e.target.checked }) } }), h('span.small', 'Show ns')),
       seg('anv-ptext', [{ id: 'stars', label: 'Stars', tip: '* P ≤ 0.05, ** ≤ 0.01, *** ≤ 0.001, **** ≤ 0.0001 (GraphPad style)' }, { id: 'exact', label: 'P values', tip: 'Print the P value on each bracket' }], g.pText, v => set({ pText: v })),
@@ -21322,11 +21379,10 @@ FM.spectraData = {"source": "FPbase (https://www.fpbase.org) · Lambert TJ, Nat 
     const move = (i, d) => { const n = ids.slice(); const [x] = n.splice(i, 1); n.splice(i + d, 0, x); setIds(n); };
     const counts = {};
     r.model.groups.forEach((m, i) => { counts[ids[i]] = m.values.length; });
-    const chips = r.shown.map((x, i) => h('span.anv-chip', { title: x.name + ' · n = ' + counts[x.id] },
-      h('button.btn.ghost.sm.icon', { 'data-tip': 'Move left', disabled: i === 0, on: { click: () => move(i, -1) } }, icon('left')),
+    const chips = r.shown.map(x => h('span.anv-chip', { title: x.name + ' · n = ' + counts[x.id] + ' — drag to reorder' },
       h('span.anv-sw', { style: { background: x.color } }), h('span.anv-cn', x.name), h('span.mono.muted.small', 'n=' + counts[x.id]),
-      h('button.btn.ghost.sm.icon', { 'data-tip': 'Move right', disabled: i === ids.length - 1, on: { click: () => move(i, 1) } }, icon('right')),
       h('button.btn.ghost.sm.icon.anv-hide', { 'data-tip': 'Leave out of the graph', on: { click: () => setIds(ids.filter(id => id !== x.id)) } }, icon('x'))));
+    FM.dom.sortable(chips, (from, to) => move(from, to - from));
     const addable = r.hidden.filter(x => ws.samplesIn(x.id).length);
     const add = addable.length ? h('button.btn.ghost.sm.anv-add', { on: { click: e => menu(e.currentTarget, addable.map(x => ({
       label: x.name + (x.role === 'gate' ? ' (gate control)' : ''), fn: () => setIds(ids.concat([x.id])) }))) } }, icon('plus'), 'Condition') : null;
@@ -21496,7 +21552,7 @@ FM.guideMedia = {"load":{"src":"data:image/webp;base64,UklGRsTfAgBXRUJQVlA4WAoAA
       points: [
         point('Pick the measurement', 'and the kind: bar, dot, box, or paired (lines joining matched wells). Error bars are SD or SEM.'),
         point('Choose the comparison:', 'all pairs, each condition against one, or none. The test is chosen for you (t test for two conditions; ANOVA with Tukey or Dunnett for more) and gives the same numbers as GraphPad Prism.'),
-        point('Show it your way.', 'Stars or P values on the brackets, with or without the non-significant ones; leave conditions out, reorder them, add them back; add a title and an axis title.'),
+        point('Show it your way.', 'Stars or P values on the brackets, with or without the non-significant ones; leave conditions out, drag their chips to reorder them, add them back; drag graphs in the list to reorder it; add a title and an axis title.'),
         point('Paired data.', 'Match wells by their order in each condition, by plate row, or by plate column.'),
         point('Take the graph out.', 'Copy image, PNG or SVG; the test, every comparison and n, mean, SD and SEM sit beside it.'),
       ],
