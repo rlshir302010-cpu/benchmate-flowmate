@@ -1,8 +1,3 @@
-# FlowMate
+# FlowMate has moved
 
-Free flow cytometry analysis in your browser — part of BenchMate.
-
-**Open the app:** the GitHub Pages link for this repository (Settings → Pages).
-
-Everything runs on your computer: FCS files are read in the browser and never uploaded.
-This repository holds only the built app (`index.html`, one self-contained file).
+FlowMate now lives at **https://rlshir302010-cpu.github.io/flowmate/** — source code, validation and the app: https://github.com/rlshir302010-cpu/flowmate
